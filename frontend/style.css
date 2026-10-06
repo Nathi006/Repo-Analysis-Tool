@@ -323,6 +323,7 @@ th {
   top: 0;
 }
 th:hover { color: var(--text); }
+th.num { text-align: right; }
 th[data-dir="asc"]::after { content: " ▲"; font-size: 10px; }
 th[data-dir="desc"]::after { content: " ▼"; font-size: 10px; }
 tr:hover td { background: var(--hover); }

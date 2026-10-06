@@ -337,7 +337,7 @@ function renderAuthorBreakdown(data) {
     <td class="num">${fmtInt(a.churn)}</td>
     <td class="num">${fmtPct(a.ownership)}</td></tr>`).join("");
   $("author-table-wrap").innerHTML = `<table>
-    <thead><tr><th>Author</th><th>Email</th><th>Modifications</th><th>Churn</th><th>Ownership</th></tr></thead>
+    <thead><tr><th>Author</th><th>Email</th><th class="num">Modifications</th><th class="num">Churn</th><th class="num">Ownership</th></tr></thead>
     <tbody>${rows || `<tr><td colspan="5" class="empty-row">No commits in the selected set.</td></tr>`}
     </tbody></table>`;
   renderOwnershipChart(data.authors);
@@ -408,11 +408,11 @@ function renderOwnershipChart(authors) {
 function statTable(rows, kind, onPick) {
   return `<table><thead><tr>
     <th data-sort="path">Path</th>
-    <th data-sort="added">Added</th>
-    <th data-sort="removed">Removed</th>
-    <th data-sort="growth">Growth</th>
-    <th data-sort="churn">Churn</th>
-    <th data-sort="mods">Mods</th>
+    <th data-sort="added" class="num">Added</th>
+    <th data-sort="removed" class="num">Removed</th>
+    <th data-sort="growth" class="num">Growth</th>
+    <th data-sort="churn" class="num">Churn</th>
+    <th data-sort="mods" class="num">Mods</th>
     <th>Owner</th></tr></thead><tbody>
     ${rows.map((r) => {
       const churn = r.added + r.removed;
@@ -504,8 +504,8 @@ async function loadAuthorsTab() {
   const merged = new Set((state.detail?.authors || [])
     .filter((a) => a.canonical_id).map((a) => a.id));
   $("authors-table").innerHTML = `<table><thead><tr>
-    <th></th><th>Author</th><th>Email</th><th>Commits</th><th>Mods</th><th>Churn</th>
-    <th>Ownership</th></tr></thead><tbody>
+    <th></th><th>Author</th><th>Email</th><th class="num">Commits</th><th class="num">Mods</th><th class="num">Churn</th>
+    <th class="num">Ownership</th></tr></thead><tbody>
     ${rows.filter((r) => !merged.has(r.id)).map((r) => `
       <tr><td><input type="checkbox" class="merge-cb" value="${r.id}"></td>
       <td>${esc(r.name)}</td><td class="mono">${esc(r.email)}</td>
