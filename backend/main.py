@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, jobs
 from .api import router
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
@@ -17,6 +17,7 @@ app.include_router(router)
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    jobs.recover()  # resume jobs interrupted by a previous shutdown
 
 
 @app.get("/")

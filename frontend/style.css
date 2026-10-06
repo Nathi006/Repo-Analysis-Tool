@@ -103,6 +103,7 @@ body {
 .badge.ready { background: #14532d; color: #86efac; }
 .badge.pending, .badge.cloning, .badge.extracting { background: #78350f; color: #fcd34d; }
 .badge.error { background: #7f1d1d; color: #fca5a5; }
+.badge.cancelled { background: #334155; color: #94a3b8; }
 .progress-track {
   height: 4px; background: #334155; border-radius: 999px; margin-top: 8px; overflow: hidden;
 }

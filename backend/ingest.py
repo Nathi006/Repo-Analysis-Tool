@@ -7,7 +7,7 @@ import subprocess
 import time
 import zipfile
 
-from . import db, extract, progress
+from . import db, extract, jobs, progress
 
 REPO_ROOT = db.DATA_DIR / "repos"
 
@@ -95,13 +95,36 @@ def ingest_clone(url, name=None, head_ref=None):
     return repo_id
 
 
+def _resolve_missing_ref(kind, workdir, head_ref):
+    """Turn a failed rev-parse into a friendly error, or fetch the ref.
+
+    Empty repositories get a clear message. For clones, a branch that only
+    exists on the remote is fetched and FETCH_HEAD is used for extraction.
+    """
+    n = subprocess.run(["git", "-C", workdir, "rev-list", "--count", "--all"],
+                       capture_output=True, text=True, timeout=300)
+    if n.returncode == 0 and n.stdout.strip() == "0":
+        raise RuntimeError("repository has no commits")
+    if kind == "clone" and head_ref != "HEAD":
+        try:
+            subprocess.run(["git", "-C", workdir, "fetch", "origin", head_ref],
+                           check=True, capture_output=True, timeout=3600)
+            subprocess.run(["git", "-C", workdir, "rev-parse", "--verify",
+                            "FETCH_HEAD^{commit}"],
+                           check=True, capture_output=True, timeout=120)
+            return "FETCH_HEAD"
+        except subprocess.CalledProcessError:
+            pass
+    raise RuntimeError(f"reference '{head_ref}' does not exist")
+
+
 def run_ingest(repo_id):
-    """Background task: performs clone (if needed) then extraction."""
+    """Worker: performs clone (if needed) then extraction. Cancellation-safe."""
     with db.connect() as conn:
         row = conn.execute("SELECT * FROM repos WHERE id=?", (repo_id,)).fetchone()
         if row is None:
             return
-        kind, source, head_ref = row["kind"], row["source"], row["head_ref"]
+        kind, source, head_ref = row["kind"], row["source"], row["head_ref"] or "HEAD"
         workdir = None
     try:
         if kind == "clone":
@@ -110,10 +133,16 @@ def run_ingest(repo_id):
                 shutil.rmtree(target)
             target.mkdir(parents=True)
             progress.set_progress(repo_id, "cloning", 0, 0)
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ["git", "clone", "--progress", source, str(target / "repo")],
-                capture_output=True, text=True, timeout=3600,
-            )
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            jobs.register_proc(repo_id, proc)
+            try:
+                proc.wait(timeout=3600)
+            finally:
+                jobs.unregister_proc(repo_id)
+            if jobs.is_cancelled(repo_id):
+                return
             if proc.returncode != 0:
                 raise RuntimeError("clone failed: " + proc.stderr[-500:])
             workdir = str(target / "repo")
@@ -121,22 +150,30 @@ def run_ingest(repo_id):
             workdir = _locate_workdir(repo_id)
         if workdir is None:
             raise RuntimeError("cannot locate repository working directory")
-        # validate it is a git repo and resolve the ref
+        # validate it is a git repo and resolve the ref (friendly errors)
         subprocess.run(["git", "-C", workdir, "rev-parse", "--git-dir"],
                        check=True, capture_output=True, timeout=120)
-        if head_ref and head_ref != "HEAD":
-            try:
-                subprocess.run(["git", "-C", workdir, "rev-parse", "--verify", head_ref + "^{commit}"],
-                               check=True, capture_output=True, timeout=120)
-            except subprocess.CalledProcessError:
-                raise RuntimeError(f"reference '{head_ref}' does not exist in repository")
+        try:
+            subprocess.run(["git", "-C", workdir, "rev-parse", "--verify",
+                            head_ref + "^{commit}"],
+                           check=True, capture_output=True, timeout=120)
+        except subprocess.CalledProcessError:
+            head_ref = _resolve_missing_ref(kind, workdir, head_ref)
+        if jobs.is_cancelled(repo_id):
+            return
         progress.set_progress(repo_id, "extracting", 0, 0)
-        extract.extract_repo(conn=None, repo_id=repo_id, workdir=workdir, head_ref=head_ref)
+        extract.extract_repo(conn=None, repo_id=repo_id, workdir=workdir,
+                             head_ref=head_ref,
+                             should_cancel=lambda: jobs.is_cancelled(repo_id))
+        if jobs.is_cancelled(repo_id):
+            return
         with db.connect() as conn:
             conn.execute(
                 "UPDATE repos SET status='ready', error=NULL WHERE id=?", (repo_id,)
             )
         progress.set_progress(repo_id, "ready", 100, 100)
+    except jobs.Cancelled:
+        return  # repo was deleted while the job ran
     except Exception as e:  # noqa: BLE001
         with db.connect() as conn:
             conn.execute(

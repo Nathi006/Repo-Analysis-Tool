@@ -22,8 +22,9 @@ def _set_conditions(alias, from_ts, to_ts, hashes, author_ids):
         sql.append(f"{alias}.committer_ts < ?")
         params.append(to_ts)
     if hashes:
-        sql.append(f"{alias}.hash IN ({','.join('?' * len(hashes))})")
-        params.extend(hashes)
+        # full or prefix hashes: LIKE 'ab12%' also matches the full 40 chars
+        sql.append("(" + " OR ".join([f"{alias}.hash LIKE ?"] * len(hashes)) + ")")
+        params.extend([h + "%" for h in hashes])
     if author_ids:
         sql.append(f"{alias}.author_id IN ({','.join('?' * len(author_ids))})")
         params.extend(author_ids)

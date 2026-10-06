@@ -251,6 +251,19 @@ def run_metric_checks(repo_id, expect_ready):
     check("manual removed = 4", m["metric"]["removed"], 4)
     check("manual mods = 2", m["metric"]["modifications"], 2)
 
+    # commit selection by short hash prefix
+    m = metric(repo_id, commits=hashes["initial"][:10])
+    check("prefix hash |H| = 1", m["set"]["count"], 1)
+    check("prefix hash churn = 4", m["metric"]["churn"], 4)
+
+    # malformed hashes rejected
+    try:
+        metric(repo_id, commits="zzz")
+        check("invalid hash rejected", "no exception", "HTTP 400")
+    except AssertionError as e:
+        check("invalid hash rejected",
+              "HTTP 400" if "HTTP 400" in str(e) else str(e), "HTTP 400")
+
     # authors: mailmap canonicalised alice.old -> Alice at extraction time
     authors = api(f"/api/repos/{repo_id}/authors")
     check("author count = 2 (mailmap applied)", len(authors), 2)
@@ -354,6 +367,27 @@ def main():
         created.append(("id", bid))
         check("unreachable clone -> status error",
               wait_ready(bid)["status"], "error")
+
+        # retry re-attempts the failed job
+        check("retry endpoint returns ok",
+              api(f"/api/repos/{bid}/retry", method="POST")["ok"], True)
+        check("retry re-attempts and fails again",
+              wait_ready(bid)["status"], "error")
+
+        # empty repository -> friendly error instead of a git crash
+        empty_dir = os.path.join(HERE, "_empty")
+        os.makedirs(empty_dir, exist_ok=True)
+        subprocess.run(["git", "init", "-b", "main", "-q"], cwd=empty_dir,
+                       check=True)
+        eid = api("/api/repos/clone?url=" +
+                  urllib.parse.quote("file://" + empty_dir) +
+                  "&name=oracle-empty", method="POST")["id"]
+        created.append(("id", eid))
+        r = wait_ready(eid)
+        check("empty repo -> error with friendly message",
+              (r["status"], "no commits" in (r["error"] or "")),
+              ("error", True))
+        shutil.rmtree(empty_dir, ignore_errors=True)
 
     finally:
         print("\n== cleanup ==")

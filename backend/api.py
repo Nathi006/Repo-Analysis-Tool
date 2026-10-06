@@ -1,10 +1,26 @@
 """REST API for the RAT dashboard."""
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
+import re
+import shutil
 
-from . import db, ingest, metrics, progress
+from fastapi import APIRouter, HTTPException, Query, UploadFile
+
+from . import db, ingest, jobs, metrics, progress
 
 router = APIRouter(prefix="/api")
+
+_HEX_HASH = re.compile(r"^[0-9a-fA-F]{4,40}$")
+
+
+def _parse_hashes(raw):
+    """Commit-set filter: accept full or prefix hashes, comma-separated."""
+    if not raw:
+        return None
+    hashes = [h.strip() for h in raw.split(",") if h.strip()]
+    for h in hashes:
+        if not _HEX_HASH.match(h):
+            raise HTTPException(400, f"invalid commit hash '{h}'")
+    return hashes
 
 
 def _repo_or_404(repo_id):
@@ -32,34 +48,48 @@ def list_repos():
 
 
 @router.post("/repos/upload")
-async def upload_repo(background: BackgroundTasks, file: UploadFile,
-                      name: str = "", ref: str = "HEAD"):
+async def upload_repo(file: UploadFile, name: str = "", ref: str = "HEAD"):
     data = await file.read()
     try:
         repo_id, _ = ingest.ingest_zip(data, name or None, ref or "HEAD")
     except ValueError as e:
         raise HTTPException(400, str(e))
-    background.add_task(ingest.run_ingest, repo_id)
+    jobs.start_job(repo_id)
     return {"id": repo_id}
 
 
 @router.post("/repos/clone")
-def clone_repo(background: BackgroundTasks, url: str, name: str = "",
-               ref: str = "HEAD"):
+def clone_repo(url: str, name: str = "", ref: str = "HEAD"):
     if not url.startswith(("http://", "https://", "git://", "ssh://", "git@", "file://")):
         raise HTTPException(400, "invalid repository URL")
     repo_id = ingest.ingest_clone(url, name or None, ref or "HEAD")
-    background.add_task(ingest.run_ingest, repo_id)
+    jobs.start_job(repo_id)
     return {"id": repo_id}
 
 
 @router.delete("/repos/{repo_id}")
 def delete_repo(repo_id: int):
     _repo_or_404(repo_id)
+    # stop a running job first, then remove data and files
+    jobs.cancel(repo_id)
+    jobs.wait(repo_id, timeout=30)
     with db.connect() as conn:
         conn.execute("DELETE FROM repos WHERE id=?", (repo_id,))
-    import shutil
     shutil.rmtree(ingest.repo_dir(repo_id), ignore_errors=True)
+    progress.clear_progress(repo_id)
+    return {"ok": True}
+
+
+@router.post("/repos/{repo_id}/retry")
+def retry_repo(repo_id: int):
+    """Re-run ingestion for a failed repository."""
+    row = _repo_or_404(repo_id)
+    if row["status"] == "ready":
+        return {"ok": True}
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE repos SET status='queued', error=NULL WHERE id=?", (repo_id,))
+    jobs.start_job(repo_id)
     return {"ok": True}
 
 
@@ -143,7 +173,7 @@ def _parse_filters(repo_id, params):
         return [int(x) for x in raw.split(",") if x.strip()] if raw else None
     from_ts = int(params.get("from")) if params.get("from") not in (None, "") else None
     to_ts = int(params.get("to")) if params.get("to") not in (None, "") else None
-    hashes = [h for h in (params.get("commits") or "").split(",") if h.strip()] or None
+    hashes = _parse_hashes(params.get("commits"))
     authors = to_ints(params.get("authors"))
     return from_ts, to_ts, hashes, authors
 
@@ -155,7 +185,7 @@ def repo_metrics(repo_id: int, kind: str = "repo", path: str = "",
     _repo_or_404(repo_id)
     if kind not in ("repo", "dir", "file"):
         raise HTTPException(400, "kind must be repo, dir or file")
-    hashes = [h for h in commits.split(",") if h.strip()] or None
+    hashes = _parse_hashes(commits)
     author_ids = [int(x) for x in authors.split(",") if x.strip()] or None
     with db.connect() as conn:
         info = metrics.set_info(conn, repo_id, from_, to, hashes, author_ids)
@@ -170,7 +200,7 @@ def repo_leaders(repo_id: int, kind: str = "file",
                  from_: int = Query(default=None, alias="from"),
                  to: int = None, commits: str = "", authors: str = "",
                  limit: int = 100):
-    hashes = [h for h in commits.split(",") if h.strip()] or None
+    hashes = _parse_hashes(commits)
     author_ids = [int(x) for x in authors.split(",") if x.strip()] or None
     with db.connect() as conn:
         return metrics.leaders(conn, repo_id, kind, from_, to, hashes,
@@ -180,7 +210,7 @@ def repo_leaders(repo_id: int, kind: str = "file",
 @router.get("/repos/{repo_id}/authors")
 def repo_authors(repo_id: int, from_: int = Query(default=None, alias="from"),
                  to: int = None, commits: str = "", limit: int = 100):
-    hashes = [h for h in commits.split(",") if h.strip()] or None
+    hashes = _parse_hashes(commits)
     with db.connect() as conn:
         return metrics.author_leaderboard(conn, repo_id, from_, to, hashes, limit)
 
@@ -193,7 +223,7 @@ def repo_timeseries(repo_id: int, kind: str = "repo", path: str = "",
     buckets = {"day": 86400, "week": 604800, "month": 2592000, "year": 31536000}
     if bucket not in buckets:
         raise HTTPException(400, "bucket must be day, week, month or year")
-    hashes = [h for h in commits.split(",") if h.strip()] or None
+    hashes = _parse_hashes(commits)
     author_ids = [int(x) for x in authors.split(",") if x.strip()] or None
     with db.connect() as conn:
         return metrics.timeseries(conn, repo_id, kind, path, from_, to, hashes,

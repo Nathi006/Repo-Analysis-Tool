@@ -5,5 +5,8 @@ data/
 venv/
 tests/_oracle_fixture/
 tests/_badzip/
+tests/_empty/
 tests/*.zip
 .fmt/
+IMPLEMENTATION_PLAN.md
+

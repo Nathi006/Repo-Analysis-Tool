@@ -9,7 +9,7 @@ Line format per commit (verified against git 2.43):
 """
 import subprocess
 
-from . import db, progress
+from . import db, jobs, progress
 
 RS, US = "\x1e", "\x1f"
 FLUSH_EVERY = 1000
@@ -35,8 +35,16 @@ def _split_numstat(line):
     return int(added), int(removed), path, old
 
 
-def extract_repo(conn, repo_id, workdir, head_ref="HEAD"):
-    """Extract full history from workdir into the database (long-running)."""
+def extract_repo(conn, repo_id, workdir, head_ref="HEAD", should_cancel=None):
+    """Extract full history from workdir into the database (long-running).
+
+    `should_cancel` is an optional callable returning True when the job has
+    been cancelled (repo deleted) — checked periodically and after the log
+    stream ends so a cancelled job never writes partial data.
+    """
+    def cancelled():
+        return should_cancel is not None and should_cancel()
+
     with db.connect() as conn:
         conn.execute("DELETE FROM commits WHERE repo_id=?", (repo_id,))
         conn.execute("DELETE FROM paths WHERE repo_id=?", (repo_id,))
@@ -59,6 +67,7 @@ def extract_repo(conn, repo_id, workdir, head_ref="HEAD"):
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace")
+    jobs.register_proc(repo_id, proc)
 
     conn = db.connect()
     author_ids = {}          # (name, email) -> id
@@ -90,7 +99,11 @@ def extract_repo(conn, repo_id, workdir, head_ref="HEAD"):
         entry[1] = ts
 
     try:
+        n_lines = 0
         for raw in proc.stdout:
+            n_lines += 1
+            if n_lines % 500 == 0 and cancelled():
+                raise jobs.Cancelled()
             line = raw.rstrip("\n")
             if line.startswith(RS):
                 _finish_commit(cur, file_buf, dir_buf)  # finalise previous commit
@@ -132,6 +145,8 @@ def extract_repo(conn, repo_id, workdir, head_ref="HEAD"):
                 note_path(path, cur["ts"])
                 if old is not None:
                     note_path(old, cur["ts"])
+        if cancelled():
+            raise jobs.Cancelled()  # stream ended early (killed); drop buffered data
         _finish_commit(cur, file_buf, dir_buf)
         flush()
         err = proc.stderr.read()
@@ -139,8 +154,11 @@ def extract_repo(conn, repo_id, workdir, head_ref="HEAD"):
         if rc != 0:
             raise RuntimeError("git log failed: " + err[-500:])
     finally:
+        jobs.unregister_proc(repo_id)
         conn.close()
 
+    if cancelled():
+        raise jobs.Cancelled()
     _store_paths(repo_id, path_ranges, workdir, head_ref)
     progress.set_progress(repo_id, "extracting", total, total)
 

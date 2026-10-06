@@ -86,13 +86,14 @@ function renderRepoList() {
       ${busy ? `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>` : ""}
       ${r.error ? `<div class="meta" style="color:#fca5a5">${esc(r.error)}</div>` : ""}
       <div class="actions">
+        ${r.status === "error" ? `<button class="btn retry" data-id="${r.id}">Retry</button>` : ""}
         <button class="btn danger del" data-id="${r.id}">Remove</button>
       </div>
     </div>`;
   }).join("");
   box.querySelectorAll(".repo-item").forEach((el) =>
     el.addEventListener("click", (e) => {
-      if (e.target.closest(".del")) return;
+      if (e.target.closest(".del") || e.target.closest(".retry")) return;
       selectRepo(parseInt(el.dataset.id));
     }));
   box.querySelectorAll(".del").forEach((el) =>
@@ -105,6 +106,13 @@ function renderRepoList() {
         $("dashboard").classList.add("hidden");
         $("empty-state").classList.remove("hidden");
       }
+      loadRepos();
+    }));
+  box.querySelectorAll(".retry").forEach((el) =>
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await api(`/api/repos/${el.dataset.id}/retry`, { method: "POST" });
+      toast("Retrying ingestion…");
       loadRepos();
     }));
 }

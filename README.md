@@ -26,12 +26,16 @@ The database is created automatically at `data/rat.db`.
   uploading a `.zip` of a repository (the archive must contain `.git`).
   Ingestion runs in the background with live progress; large repositories
   stay responsive because all metrics are precomputed at ingest time.
+  Jobs are durable: unfinished ingests resume automatically after a server
+  restart, failed repos offer a Retry button, and deleting a repo cancels a
+  running ingest cleanly.
 - **Object metrics** — click any file or directory in the path tree (or the
   repository itself) to see added / removed / growth / churn / modifications
   / frequency / churn rate, an ownership doughnut and per-author breakdown.
 - **Commit-set filtering** — restrict the commit set H̄ by:
   - committer-date window `[from, to)` (date pickers),
-  - a manual selection of individual commits (commits tab),
+  - a manual selection of individual commits (commits tab, full or short
+    hashes),
   - one or more authors (author filter panel),
   - any combination of the above (all ANDed).
 - **Leaderboards** — top files and top directories by churn, with sortable
@@ -65,9 +69,10 @@ backend/
   main.py       FastAPI app + static frontend serving
   api.py        REST routes (/api/repos, /metrics, /leaders, /authors, ...)
   db.py         SQLite schema (WAL), connection helpers
-  ingest.py     zip upload / clone + background job runner
+  ingest.py     zip upload / clone + worker logic, friendly ref/empty-repo errors
   extract.py    git log --numstat streaming parser → DB
   metrics.py    set-restricted metric SQL (object/leaders/authors/timeseries)
+  jobs.py       durable background jobs: threads, recovery, cancellation
   progress.py   in-memory progress registry for background jobs
 frontend/
   index.html, style.css, app.js     vanilla JS dashboard (no framework)
@@ -86,13 +91,14 @@ repositories with 10k+ commits.
 
 `tests/make_synthetic_repo.py` builds a deterministic 9-commit repository
 (adds, edits, pure rename, rename+edit above/below the −M50% threshold,
-binary files, deletions, `.mailmap`, time-window and manual-set filtering,
-manual author merge) and asserts the API output against hand-computed
-oracle values — **52 checks**, all expected to pass:
+binary files, deletions, `.mailmap`, time-window and manual-set filtering
+including short-hash prefixes, manual author merge, empty-repo and
+failed-clone error handling, retry) and asserts the API output against
+hand-computed oracle values — **58 checks**, all expected to pass:
 
 ```bash
 ./run.sh &                                   # server must be running
-python3 tests/make_synthetic_repo.py         # 52/52 checks passed
+python3 tests/make_synthetic_repo.py         # 58/58 checks passed
 ```
 
 The metrics have also been validated against real repositories: whole-repo
