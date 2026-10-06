@@ -18,6 +18,11 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const intFmt = new Intl.NumberFormat("en-US");
+function fmtInt(n) {
+  if (n === null || n === undefined) return "0";
+  return intFmt.format(n);
+}
 function fmtNum(n) {
   if (n === null || n === undefined) return "0";
   if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + "M";
@@ -117,7 +122,7 @@ function renderRepoList() {
     }));
 }
 
-async function selectRepo(id) {
+async function selectRepo(id, restore) {
   state.repoId = id;
   state.kind = "repo";
   state.path = "";
@@ -130,7 +135,9 @@ async function selectRepo(id) {
   $("empty-state").classList.add("hidden");
   $("dashboard").classList.remove("hidden");
   renderRepoList();
-  renderAuthorPanel();
+  if (restore) applyFilters(restore);
+  else renderAuthorPanel();
+  toggleSidebar(false);
   refreshAll();
 }
 
@@ -141,6 +148,53 @@ async function loadDetail() {
 async function loadTree() {
   state.tree = await api(`/api/repos/${state.repoId}/tree`);
   renderPathTree();
+}
+
+/* ---------------- URL state ---------------- */
+
+function applyFilters(h) {
+  state.kind = h.kind === "file" || h.kind === "dir" ? h.kind : "repo";
+  state.path = state.kind === "repo" ? "" : h.path;
+  state.from = h.from ? parseInt(h.from) : null;
+  state.to = h.to ? parseInt(h.to) : null;
+  state.authors = Array.isArray(h.authors) ? h.authors.filter(Number.isFinite) : [];
+  state.commits = Array.isArray(h.commits) ? h.commits : [];
+  $("date-from").value = state.from
+    ? new Date(state.from * 1000).toISOString().slice(0, 10) : "";
+  $("date-to").value = state.to
+    ? new Date((state.to - 86400) * 1000).toISOString().slice(0, 10) : "";
+  $("commit-sel-count").textContent = state.commits.length;
+  updatePathLabel();
+  renderPathTree();
+  renderAuthorPanel();
+}
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  return {
+    repo: p.get("repo") ? parseInt(p.get("repo")) : null,
+    kind: p.get("kind") || "repo",
+    path: p.get("path") || "",
+    from: p.get("from") || null,
+    to: p.get("to") || null,
+    authors: (p.get("authors") || "").split(",").filter(Boolean).map(Number),
+    commits: (p.get("commits") || "").split(",").filter(Boolean),
+  };
+}
+
+function updateHash() {
+  const p = new URLSearchParams();
+  if (state.repoId) p.set("repo", state.repoId);
+  if (state.kind !== "repo") {
+    p.set("kind", state.kind);
+    p.set("path", state.path);
+  }
+  if (state.from) p.set("from", state.from);
+  if (state.to) p.set("to", state.to);
+  if (state.authors.length) p.set("authors", state.authors.join(","));
+  if (state.commits.length) p.set("commits", state.commits.join(","));
+  const h = p.toString();
+  history.replaceState(null, "", h ? "#" + h : location.pathname);
 }
 
 /* ---------------- filters ---------------- */
@@ -222,6 +276,7 @@ function updatePathLabel() {
 
 function refreshAll() {
   if (!state.repoId) return;
+  updateHash();
   renderSetSummary();
   loadOverview();
   loadLeaders("files");
@@ -259,26 +314,27 @@ function renderObjectChip(data) {
 function renderMetricCards(data) {
   const m = data.metric;
   const cards = [
-    ["Added lines", fmtNum(m.added), "pos"],
-    ["Removed lines", fmtNum(m.removed), ""],
-    ["Growth", (m.growth >= 0 ? "+" : "") + fmtNum(m.growth), m.growth < 0 ? "neg" : "pos"],
-    ["Churn", fmtNum(m.churn), ""],
-    ["Modifications", fmtNum(m.modifications), ""],
-    ["Modification frequency", m.frequency.toFixed(3), ""],
-    ["Churn rate", m.churn_rate.toFixed(3), ""],
+    ["Added lines", fmtNum(m.added), "pos", fmtInt(m.added)],
+    ["Removed lines", fmtNum(m.removed), "", fmtInt(m.removed)],
+    ["Growth", (m.growth >= 0 ? "+" : "") + fmtNum(m.growth),
+      m.growth < 0 ? "neg" : "pos", (m.growth >= 0 ? "+" : "") + fmtInt(m.growth)],
+    ["Churn", fmtNum(m.churn), "", fmtInt(m.churn)],
+    ["Modifications", fmtNum(m.modifications), "", fmtInt(m.modifications)],
+    ["Modification frequency", m.frequency.toFixed(3), "", ""],
+    ["Churn rate", m.churn_rate.toFixed(3), "", ""],
   ];
-  $("metric-cards").innerHTML = cards.map(([label, value, cls]) =>
+  $("metric-cards").innerHTML = cards.map(([label, value, cls, exact]) =>
     `<div class="card"><div class="label">${label}</div>
-     <div class="value ${cls}">${value}</div></div>`).join("");
+     <div class="value ${cls}"${exact ? ` title="${exact}"` : ""}>${value}</div></div>`).join("");
   $("set-summary").textContent =
-    `${fmtNum(data.set.count)} commits · ${fmtDate(data.set.from)} → ${fmtDate(data.set.to)}`;
+    `${fmtInt(data.set.count)} commits · ${fmtDate(data.set.from)} → ${fmtDate(data.set.to)}`;
 }
 
 function renderAuthorBreakdown(data) {
   const rows = data.authors.map((a) => `
     <tr><td>${esc(a.name)}</td><td class="mono">${esc(a.email)}</td>
-    <td class="num">${fmtNum(a.modifications)}</td>
-    <td class="num">${fmtNum(a.churn)}</td>
+    <td class="num">${fmtInt(a.modifications)}</td>
+    <td class="num">${fmtInt(a.churn)}</td>
     <td class="num">${fmtPct(a.ownership)}</td></tr>`).join("");
   $("author-table-wrap").innerHTML = `<table>
     <thead><tr><th>Author</th><th>Email</th><th>Modifications</th><th>Churn</th><th>Ownership</th></tr></thead>
@@ -300,8 +356,12 @@ async function loadTimeseries(p) {
 function renderTimeseriesChart(data) {
   if (typeof Chart === "undefined") return;
   if (state.charts.ts) state.charts.ts.destroy();
-  const ctx = $("chart-timeseries");
-  state.charts.ts = new Chart(ctx, {
+  state.charts.tsData = data;
+  const empty = !data.length || data.every((d) => !d.added && !d.removed);
+  $("ts-empty").classList.toggle("hidden", !empty);
+  $("chart-timeseries").style.display = empty ? "none" : "";
+  if (empty) return;
+  state.charts.ts = new Chart($("chart-timeseries"), {
     type: "bar",
     data: {
       labels: data.map((d) => fmtDate(d.t)),
@@ -313,7 +373,7 @@ function renderTimeseriesChart(data) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      scales: { x: { stacked: true }, y: { stacked: true } },
+      scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true } },
       plugins: { legend: { display: false } },
     },
   });
@@ -322,14 +382,24 @@ function renderTimeseriesChart(data) {
 function renderOwnershipChart(authors) {
   if (typeof Chart === "undefined") return;
   if (state.charts.own) state.charts.own.destroy();
+  state.charts.ownData = authors;
   const top = authors.slice(0, 8);
+  const empty = !top.length;
+  $("own-empty").classList.toggle("hidden", !empty);
+  $("chart-ownership").style.display = empty ? "none" : "";
+  if (empty) return;
   state.charts.own = new Chart($("chart-ownership"), {
     type: "doughnut",
     data: {
       labels: top.map((a) => a.name),
       datasets: [{ data: top.map((a) => a.churn) }],
     },
-    options: { responsive: true, maintainAspectRatio: false, cutout: "55%" },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "55%",
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } },
+    },
   });
 }
 
@@ -348,11 +418,11 @@ function statTable(rows, kind, onPick) {
       const churn = r.added + r.removed;
       return `<tr><td class="path"><span class="path-link" data-path="${esc(r.path)}"
         data-kind="${kind}">${esc(r.path)}</span></td>
-      <td class="num">${fmtNum(r.added)}</td>
-      <td class="num">${fmtNum(r.removed)}</td>
-      <td class="num">${(r.added - r.removed >= 0 ? "+" : "")}${fmtNum(r.added - r.removed)}</td>
-      <td class="num">${fmtNum(churn)}</td>
-      <td class="num">${fmtNum(r.mods)}</td>
+      <td class="num">${fmtInt(r.added)}</td>
+      <td class="num">${fmtInt(r.removed)}</td>
+      <td class="num">${(r.added - r.removed >= 0 ? "+" : "")}${fmtInt(r.added - r.removed)}</td>
+      <td class="num">${fmtInt(churn)}</td>
+      <td class="num">${fmtInt(r.mods)}</td>
       <td class="owner-cell" id="owner-${kind}-${btoa(unescape(encodeURIComponent(r.path)))}">…</td>
       </tr>`;
     }).join("") || `<tr><td colspan="7" class="empty-row">Nothing changed in this set.</td></tr>`}
@@ -439,8 +509,8 @@ async function loadAuthorsTab() {
     ${rows.filter((r) => !merged.has(r.id)).map((r) => `
       <tr><td><input type="checkbox" class="merge-cb" value="${r.id}"></td>
       <td>${esc(r.name)}</td><td class="mono">${esc(r.email)}</td>
-      <td class="num">${fmtNum(r.commits)}</td><td class="num">${fmtNum(r.mods)}</td>
-      <td class="num">${fmtNum(r.churn)}</td>
+      <td class="num">${fmtInt(r.commits)}</td><td class="num">${fmtInt(r.mods)}</td>
+      <td class="num">${fmtInt(r.churn)}</td>
       <td class="num">${fmtPct(r.ownership)}</td></tr>`).join("")
       || `<tr><td colspan="7" class="empty-row">No authors.</td></tr>`}</tbody></table>`;
 }
@@ -604,6 +674,52 @@ $("dirs-search").addEventListener("input", () => {
   });
 });
 
+/* ---------------- theme & mobile menu ---------------- */
+
+const THEME_KEY = "rat-theme";
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem(THEME_KEY, t);
+  $("theme-btn").textContent = t === "dark" ? "☀️" : "🌙";
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = cssVar("--muted");
+    Chart.defaults.borderColor = cssVar("--border");
+  }
+  if (state.charts.tsData) renderTimeseriesChart(state.charts.tsData);
+  if (state.charts.ownData) renderOwnershipChart(state.charts.ownData);
+}
+$("theme-btn").addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
+
+function toggleSidebar(open) {
+  $("sidebar").classList.toggle("open", open);
+  $("sidebar-backdrop").classList.toggle("hidden", !open);
+}
+$("menu-btn").addEventListener("click", () =>
+  toggleSidebar(!$("sidebar").classList.contains("open")));
+$("sidebar-backdrop").addEventListener("click", () => toggleSidebar(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    $("path-panel").classList.add("hidden");
+    $("author-panel").classList.add("hidden");
+    toggleSidebar(false);
+  }
+});
+
 /* ---------------- boot ---------------- */
 
-loadRepos().catch((e) => toast("Cannot reach API: " + e.message, true));
+applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+loadRepos().then(() => {
+  const h = readHash();
+  if (h.repo) selectRepo(h.repo, h);
+}).catch((e) => toast("Cannot reach API: " + e.message, true));
+window.addEventListener("hashchange", () => {
+  const h = readHash();
+  if (!h.repo) return;
+  if (h.repo !== state.repoId) selectRepo(h.repo, h);
+  else applyFilters(h);
+});

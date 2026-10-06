@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RAT — Repo Analysis Tool</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("rat-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");}catch(e){document.documentElement.dataset.theme="light";}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='12' width='4' height='9' rx='1' fill='%232563eb'/%3E%3Crect x='10' y='6' width='4' height='15' rx='1' fill='%232563eb'/%3E%3Crect x='17' y='9' width='4' height='12' rx='1' fill='%232563eb'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/vendor/chart.umd.min.js"></script>
 </head>
@@ -31,6 +33,7 @@
   </aside>
 
   <main id="main">
+    <button id="menu-btn" class="btn subtle" title="Toggle repository list" aria-label="Menu">☰</button>
     <div id="empty-state" class="empty">
       <h2>Add a repository to begin</h2>
       <p>Paste a git URL and click <b>Add from URL</b>, or upload a zip archive
@@ -65,6 +68,8 @@
         <div class="filter-group">
           <span id="set-summary" class="set-summary"></span>
         </div>
+        <span class="filter-spacer"></span>
+        <button id="theme-btn" class="btn subtle" title="Toggle dark mode">🌙</button>
         <button id="btn-reset" class="btn subtle">Reset</button>
       </header>
 
@@ -82,10 +87,12 @@
         <div class="charts">
           <div class="chart-box">
             <h3>Churn over time</h3>
+            <div id="ts-empty" class="chart-empty hidden">No activity in the selected set.</div>
             <canvas id="chart-timeseries"></canvas>
           </div>
           <div class="chart-box">
             <h3>Author ownership</h3>
+            <div id="own-empty" class="chart-empty hidden">No commits by any author in this set.</div>
             <canvas id="chart-ownership"></canvas>
           </div>
         </div>
@@ -123,6 +130,7 @@
   </main>
 </div>
 
+<div id="sidebar-backdrop" class="hidden"></div>
 <div id="toast" class="toast hidden"></div>
 <script src="/static/app.js"></script>
 </body>
