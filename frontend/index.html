@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAT — Repo Analysis Tool</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/vendor/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <h1>RAT</h1>
+      <span>Repo Analysis Tool</span>
+    </div>
+    <div class="add-box">
+      <div class="row">
+        <input id="clone-url" type="text" placeholder="Repository URL (git clone)…">
+      </div>
+      <div class="row">
+        <input id="clone-ref" type="text" placeholder="Ref / commit (default HEAD)">
+      </div>
+      <div class="row">
+        <button id="btn-clone" class="btn primary">Add from URL</button>
+        <label class="btn" for="zip-file">Upload zip</label>
+        <input id="zip-file" type="file" accept=".zip" hidden>
+      </div>
+    </div>
+    <div id="repo-list" class="repo-list"></div>
+  </aside>
+
+  <main id="main">
+    <div id="empty-state" class="empty">
+      <h2>Add a repository to begin</h2>
+      <p>Paste a git URL and click <b>Add from URL</b>, or upload a zip archive
+         that contains a <code>.git</code> directory.</p>
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <header id="filter-bar">
+        <div class="filter-group">
+          <button id="path-btn" class="btn chip" title="Filter by file or directory">
+            📁 <span id="path-label">Repository</span> ▾
+          </button>
+          <div id="path-panel" class="panel hidden">
+            <input id="path-search" type="text" placeholder="Search paths…">
+            <div id="path-tree" class="path-tree"></div>
+          </div>
+        </div>
+        <div class="filter-group">
+          <button id="author-btn" class="btn chip">👤 Authors ▾</button>
+          <div id="author-panel" class="panel hidden">
+            <div id="author-options"></div>
+          </div>
+        </div>
+        <div class="filter-group">
+          <input id="date-from" type="date" class="date-input">
+          <span class="sep">→</span>
+          <input id="date-to" type="date" class="date-input">
+        </div>
+        <div class="filter-group">
+          <button id="commit-btn" class="btn chip">🔖 Commits (<span id="commit-sel-count">0</span>)</button>
+        </div>
+        <div class="filter-group">
+          <span id="set-summary" class="set-summary"></span>
+        </div>
+        <button id="btn-reset" class="btn subtle">Reset</button>
+      </header>
+
+      <nav id="tabs">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="files">Files</button>
+        <button class="tab" data-tab="dirs">Directories</button>
+        <button class="tab" data-tab="authors">Authors</button>
+        <button class="tab" data-tab="commits">Commit set</button>
+      </nav>
+
+      <section id="tab-overview" class="tab-body">
+        <div id="object-chip" class="object-chip"></div>
+        <div id="metric-cards" class="cards"></div>
+        <div class="charts">
+          <div class="chart-box">
+            <h3>Churn over time</h3>
+            <canvas id="chart-timeseries"></canvas>
+          </div>
+          <div class="chart-box">
+            <h3>Author ownership</h3>
+            <canvas id="chart-ownership"></canvas>
+          </div>
+        </div>
+        <div class="chart-box wide">
+          <h3>Object metrics by author</h3>
+          <div id="author-table-wrap"></div>
+        </div>
+      </section>
+
+      <section id="tab-files" class="tab-body hidden">
+        <input id="files-search" type="text" class="search" placeholder="Search files…">
+        <div id="files-table" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-dirs" class="tab-body hidden">
+        <input id="dirs-search" type="text" class="search" placeholder="Search directories…">
+        <div id="dirs-table" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-authors" class="tab-body hidden">
+        <p class="hint">Select two or more authors and merge them into one identity.
+           <code>.mailmap</code> entries are applied automatically.</p>
+        <button id="btn-merge" class="btn primary">Merge selected authors</button>
+        <div id="authors-table" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-commits" class="tab-body hidden">
+        <p class="hint">Pick specific commits to restrict the metric set, or use the
+           date range in the filter bar. Empty selection = whole history.</p>
+        <input id="commits-search" type="text" class="search" placeholder="Search commits…">
+        <button id="btn-commit-clear" class="btn subtle">Clear selection</button>
+        <div id="commits-table" class="table-wrap"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

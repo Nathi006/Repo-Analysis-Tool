@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+data/
+.venv/
+venv/
+tests/_oracle_fixture/
+tests/_badzip/
+tests/*.zip
+.fmt/
