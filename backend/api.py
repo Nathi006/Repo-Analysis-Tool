@@ -105,9 +105,10 @@ def repo_detail(repo_id: int):
             "WHERE repo_id=?", (repo_id,)).fetchone()
         d["first_ts"], d["last_ts"] = bounds["lo"], bounds["hi"]
         d["authors"] = [dict(a) for a in conn.execute(
-            "SELECT a.id, a.name, a.email, a.canonical_id, "
-            "(SELECT COUNT(*) FROM commits c WHERE c.author_id=a.id) commits "
-            "FROM authors a WHERE a.repo_id=? ORDER BY commits DESC", (repo_id,))]
+            "SELECT a.id, a.name, a.email, a.canonical_id, COALESCE(n.cnt, 0) commits "
+            "FROM authors a LEFT JOIN (SELECT author_id, COUNT(*) cnt FROM commits "
+            "WHERE repo_id=? GROUP BY author_id) n ON n.author_id = a.id "
+            "WHERE a.repo_id=? ORDER BY commits DESC", (repo_id, repo_id))]
     d.update(progress.get_progress(repo_id))
     return d
 

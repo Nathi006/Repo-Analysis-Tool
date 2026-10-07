@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS commits(
 );
 CREATE INDEX IF NOT EXISTS ix_commits_repo_ts ON commits(repo_id, committer_ts);
 CREATE INDEX IF NOT EXISTS ix_commits_repo_author ON commits(repo_id, author_id);
+CREATE INDEX IF NOT EXISTS ix_commits_author ON commits(author_id);
 
 CREATE TABLE IF NOT EXISTS file_stats(
   commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE,

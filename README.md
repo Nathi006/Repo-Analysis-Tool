@@ -18,6 +18,8 @@ pip install -r requirements.txt
 ./run.sh            # serves http://127.0.0.1:8000
 ```
 
+After running the shell script, the web app should be found at http://127.0.0.1:8000
+
 The database is created automatically at `data/rat.db`.
 
 ## Features

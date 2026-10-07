@@ -118,13 +118,13 @@ def author_leaderboard(conn, repo_id, from_ts, to_ts, hashes, limit=100):
         f"LEFT JOIN dir_stats d ON d.commit_id = c.id AND d.path = '' "
         f"WHERE {cond} GROUP BY COALESCE(ca.id, a.id) "
         f"ORDER BY churn DESC LIMIT ?", [repo_id] + params + [limit]).fetchall()
+    total = conn.execute(
+        f"SELECT COALESCE(SUM(d.added + d.removed),0) FROM dir_stats d "
+        f"JOIN commits c ON c.id = d.commit_id "
+        f"WHERE d.path = '' AND {cond}", [repo_id] + params).fetchone()[0]
     out = []
     for r in rows:
         d = dict(r)
-        total = conn.execute(
-            f"SELECT COALESCE(SUM(d.added + d.removed),0) FROM dir_stats d "
-            f"JOIN commits c ON c.id = d.commit_id "
-            f"WHERE d.path = '' AND {cond}", [repo_id] + params).fetchone()[0]
         d["ownership"] = round(d["churn"] / total, 6) if total else 0.0
         out.append(d)
     return out

@@ -12,6 +12,9 @@ const state = {
   detail: null,          // repo detail (authors, bounds)
   tree: [],              // paths list
   charts: { ts: null, own: null },
+  gen: 0,                // bumped on every repo/filter change; stale responses are dropped
+  ctrl: null,            // AbortController for in-flight dashboard requests
+  loadedTabs: new Set(), // tabs already loaded for the current gen
 };
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +58,22 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+/* Dashboard request: cancelled when the repo or filters change. */
+function dash(path) {
+  return api(path, { signal: state.ctrl.signal });
+}
+function fail(e) {
+  if (e.name !== "AbortError") toast(e.message, true);
+}
+
+/* Starts a new load generation, aborting requests from the previous one. */
+function newGen() {
+  if (state.ctrl) state.ctrl.abort();
+  state.ctrl = new AbortController();
+  state.loadedTabs.clear();
+  return ++state.gen;
+}
+
 function filterParams() {
   const p = new URLSearchParams();
   if (state.from) p.set("from", state.from);
@@ -70,7 +89,7 @@ async function loadRepos() {
   const repos = await api("/api/repos");
   state.repos = repos;
   renderRepoList();
-  const busy = repos.some((r) => ["pending", "cloning", "extracting"].includes(r.status));
+  const busy = repos.some((r) => ["pending", "queued", "cloning", "extracting"].includes(r.status));
   if (busy) setTimeout(loadRepos, 2000);
 }
 
@@ -82,7 +101,7 @@ function renderRepoList() {
   }
   box.innerHTML = state.repos.map((r) => {
     const active = r.id === state.repoId ? " active" : "";
-    const busy = ["pending", "cloning", "extracting"].includes(r.status);
+    const busy = ["pending", "queued", "cloning", "extracting"].includes(r.status);
     const pct = r.total ? Math.round((r.done / r.total) * 100) : 0;
     return `<div class="repo-item${active}" data-id="${r.id}">
       <div class="name">${esc(r.name)}</div>
@@ -131,7 +150,16 @@ async function selectRepo(id, restore) {
   state.commits = [];
   $("date-from").value = "";
   $("date-to").value = "";
-  await Promise.all([loadDetail(), loadTree()]);
+  const gen = newGen();
+  let detail, tree;
+  try {
+    [detail, tree] = await Promise.all([
+      dash(`/api/repos/${id}`), dash(`/api/repos/${id}/tree`)]);
+  } catch (e) { fail(e); return; }
+  if (gen !== state.gen) return;
+  state.detail = detail;
+  state.tree = tree;
+  renderPathTree();
   $("empty-state").classList.add("hidden");
   $("dashboard").classList.remove("hidden");
   renderRepoList();
@@ -276,25 +304,35 @@ function updatePathLabel() {
 
 function refreshAll() {
   if (!state.repoId) return;
+  newGen();
   updateHash();
   renderSetSummary();
   loadOverview();
-  loadLeaders("files");
-  loadLeaders("dirs");
-  loadAuthorsTab();
-  loadCommitsTab();
+  const active = document.querySelector(".tab.active");
+  loadTab(active ? active.dataset.tab : "overview");
+}
+
+/* Loads a non-overview tab once per generation, only when it is shown. */
+function loadTab(tab) {
+  if (state.loadedTabs.has(tab)) return;
+  state.loadedTabs.add(tab);
+  if (tab === "files" || tab === "dirs") loadLeaders(tab);
+  else if (tab === "authors") loadAuthorsTab();
+  else if (tab === "commits") loadCommitsTab();
 }
 
 async function loadOverview() {
+  const gen = state.gen;
   try {
     const p = filterParams();
-    const data = await api(`/api/repos/${state.repoId}/metrics?kind=${state.kind}` +
+    const data = await dash(`/api/repos/${state.repoId}/metrics?kind=${state.kind}` +
       `&path=${encodeURIComponent(state.path)}&${p}`);
+    if (gen !== state.gen) return;
     renderMetricCards(data);
     renderObjectChip(data);
     renderAuthorBreakdown(data);
-    loadTimeseries(p);
-  } catch (e) { toast(e.message, true); }
+    loadTimeseries(p, gen);
+  } catch (e) { fail(e); }
 }
 
 function renderObjectChip(data) {
@@ -343,10 +381,11 @@ function renderAuthorBreakdown(data) {
   renderOwnershipChart(data.authors);
 }
 
-async function loadTimeseries(p) {
+async function loadTimeseries(p, gen) {
   try {
-    const data = await api(`/api/repos/${state.repoId}/timeseries?kind=${state.kind}` +
+    const data = await dash(`/api/repos/${state.repoId}/timeseries?kind=${state.kind}` +
       `&path=${encodeURIComponent(state.path)}&bucket=week&${p}`);
+    if (gen !== state.gen) return;
     renderTimeseriesChart(data);
   } catch (e) { /* charts are non-critical */ }
 }
@@ -433,8 +472,10 @@ async function loadLeaders(tab) {
   if (!state.repoId) return;
   const kind = tab === "files" ? "file" : "dir";
   const p = filterParams();
+  const gen = state.gen;
   try {
-    const rows = await api(`/api/repos/${state.repoId}/leaders?kind=${kind}&limit=200&${p}`);
+    const rows = await dash(`/api/repos/${state.repoId}/leaders?kind=${kind}&limit=200&${p}`);
+    if (gen !== state.gen) return;
     const box = $(`${tab}-table`);
     box.innerHTML = statTable(rows, kind);
     box.querySelectorAll(".path-link").forEach((el) =>
@@ -449,7 +490,7 @@ async function loadLeaders(tab) {
     attachSort(box, rows, kind);
     // fill owner column lazily
     fillOwners(rows, kind);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { fail(e); }
 }
 
 function attachSort(box, rows, kind) {
@@ -481,26 +522,37 @@ function attachSort(box, rows, kind) {
 
 async function fillOwners(rows, kind) {
   const p = filterParams();
+  const gen = state.gen;
   const top = rows.slice(0, 30);
   await Promise.all(top.map(async (r) => {
-    const cell = $(`owner-${kind}-${btoa(unescape(encodeURIComponent(r.path)))}`);
-    if (!cell) return;
+    const id = `owner-${kind}-${btoa(unescape(encodeURIComponent(r.path)))}`;
+    if (!$(id)) return;
     try {
-      const data = await api(`/api/repos/${state.repoId}/metrics?kind=${kind}` +
+      const data = await dash(`/api/repos/${state.repoId}/metrics?kind=${kind}` +
         `&path=${encodeURIComponent(r.path)}&${p}`);
+      const cell = $(id);
+      if (gen !== state.gen || !cell) return;
       const owner = data.authors[0];
       cell.innerHTML = owner
         ? `<span class="owner-bar" style="width:${Math.max(6, owner.ownership * 60)}px"></span>
            ${esc(owner.name)} ${fmtPct(owner.ownership)}`
         : "";
-    } catch (e) { cell.textContent = ""; }
+    } catch (e) {
+      const cell = $(id);
+      if (gen === state.gen && cell) cell.textContent = "";
+    }
   }));
 }
 
 async function loadAuthorsTab() {
   if (!state.repoId) return;
   const p = filterParams();
-  const rows = await api(`/api/repos/${state.repoId}/authors?limit=300&${p}`);
+  const gen = state.gen;
+  let rows;
+  try {
+    rows = await dash(`/api/repos/${state.repoId}/authors?limit=300&${p}`);
+  } catch (e) { fail(e); return; }
+  if (gen !== state.gen) return;
   const merged = new Set((state.detail?.authors || [])
     .filter((a) => a.canonical_id).map((a) => a.id));
   $("authors-table").innerHTML = `<table><thead><tr>
@@ -533,7 +585,12 @@ async function mergeSelected() {
 
 async function loadCommitsTab() {
   if (!state.repoId) return;
-  const data = await api(`/api/repos/${state.repoId}/commits?limit=500`);
+  const gen = state.gen;
+  let data;
+  try {
+    data = await dash(`/api/repos/${state.repoId}/commits?limit=500`);
+  } catch (e) { fail(e); return; }
+  if (gen !== state.gen) return;
   const selected = new Set(state.commits);
   $("commit-sel-count").textContent = state.commits.length;
   $("commits-table").innerHTML = `<table><thead><tr>
@@ -566,7 +623,7 @@ document.querySelectorAll(".tab").forEach((t) =>
     t.classList.add("active");
     document.querySelectorAll(".tab-body").forEach((x) => x.classList.add("hidden"));
     $("tab-" + t.dataset.tab).classList.remove("hidden");
-    if (t.dataset.tab === "commits") loadCommitsTab();
+    if (state.repoId) loadTab(t.dataset.tab);
   }));
 
 /* ---------------- panel toggles ---------------- */

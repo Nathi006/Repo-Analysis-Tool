@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import zipfile
 
@@ -135,16 +136,28 @@ def run_ingest(repo_id):
             progress.set_progress(repo_id, "cloning", 0, 0)
             proc = subprocess.Popen(
                 ["git", "clone", "--progress", source, str(target / "repo")],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             jobs.register_proc(repo_id, proc)
+            # stderr must be drained while git runs: an unread pipe fills up
+            # and blocks git forever (a few KB on Windows)
+            tail = []
+            reader = threading.Thread(target=_drain_clone_stderr,
+                                      args=(repo_id, proc.stderr, tail),
+                                      daemon=True)
+            reader.start()
             try:
                 proc.wait(timeout=3600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise RuntimeError("clone timed out after 1 hour")
             finally:
+                reader.join(timeout=10)
                 jobs.unregister_proc(repo_id)
             if jobs.is_cancelled(repo_id):
                 return
             if proc.returncode != 0:
-                raise RuntimeError("clone failed: " + proc.stderr[-500:])
+                raise RuntimeError("clone failed: " + "\n".join(tail)[-500:])
             workdir = str(target / "repo")
         elif kind == "zip":
             workdir = _locate_workdir(repo_id)
@@ -180,6 +193,28 @@ def run_ingest(repo_id):
                 "UPDATE repos SET status='error', error=? WHERE id=?", (str(e), repo_id)
             )
         progress.set_progress(repo_id, "error")
+
+
+_CLONE_PROGRESS = re.compile(r"^Receiving objects:\s+\d+% \((\d+)/(\d+)\)")
+
+
+def _drain_clone_stderr(repo_id, stream, tail, keep=20):
+    """Consume git clone stderr, publishing object-receive progress.
+
+    Text mode splits git's \\r-separated progress updates into lines. The
+    last `keep` lines are retained for the error message if the clone fails.
+    """
+    for line in stream:
+        line = line.rstrip()
+        if not line:
+            continue
+        m = _CLONE_PROGRESS.match(line)
+        if m:
+            progress.set_progress(repo_id, "cloning", int(m[1]), int(m[2]))
+        tail.append(line)
+        if len(tail) > keep:
+            del tail[0]
+    stream.close()
 
 
 def _locate_workdir(repo_id):
